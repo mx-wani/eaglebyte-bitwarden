@@ -1,0 +1,13 @@
+# Secrets and runtime state: never commit these
+.env
+data/
+data.pre-restore-*/
+.restore-*/
+backups/
+*.sqlite3
+*.sqlite3-*
+*.pem
+*.tar.gz
+
+# Local copy of the old aaPanel deployment backup
+Backup/

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck scripts
+        run: shellcheck -x scripts/*.sh
+
+      - name: Validate docker-compose.yml
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: Validate Caddyfile
+        run: |
+          version=$(grep -E '^CADDY_VERSION=' .env.example | cut -d= -f2)
+          docker run --rm \
+            -e DOMAIN=https://vault.mxwani.cloud -e ACME_EMAIL=ci@example.com \
+            -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "caddy:$version" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

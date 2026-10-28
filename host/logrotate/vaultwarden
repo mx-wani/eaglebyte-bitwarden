@@ -1,0 +1,10 @@
+# Vaultwarden keeps its log file open, so rotate with copytruncate.
+/opt/eaglebyte-bitwarden/data/vaultwarden.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

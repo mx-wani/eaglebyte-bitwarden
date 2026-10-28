@@ -1,0 +1,22 @@
+# Bans are added to the DOCKER-USER chain because traffic to Caddy is
+# forwarded into a container and never reaches the host's INPUT chain.
+
+[vaultwarden]
+enabled   = true
+filter    = vaultwarden
+logpath   = /opt/eaglebyte-bitwarden/data/vaultwarden.log
+banaction = iptables-allports
+chain     = DOCKER-USER
+maxretry  = 5
+findtime  = 15m
+bantime   = 4h
+
+[vaultwarden-admin]
+enabled   = true
+filter    = vaultwarden-admin
+logpath   = /opt/eaglebyte-bitwarden/data/vaultwarden.log
+banaction = iptables-allports
+chain     = DOCKER-USER
+maxretry  = 3
+findtime  = 15m
+bantime   = 24h

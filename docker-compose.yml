@@ -1,0 +1,58 @@
+name: eaglebyte-bitwarden
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:${VW_VERSION:?set VW_VERSION in .env}
+    container_name: vaultwarden
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed settings the rest of the repo depends on (fail2ban reads the log
+      # file; Caddy sends the client address in X-Real-IP).
+      LOG_FILE: /data/vaultwarden.log
+      IP_HEADER: X-Real-IP
+    volumes:
+      - ./data:/data
+    networks:
+      - vault
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1g
+    logging: *logging
+
+  caddy:
+    image: caddy:${CADDY_VERSION:?set CADDY_VERSION in .env}
+    container_name: caddy
+    restart: unless-stopped
+    depends_on:
+      vaultwarden:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificates and ACME account
+      - caddy_config:/config
+    networks:
+      - vault
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  vault:

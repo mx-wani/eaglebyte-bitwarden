@@ -1,0 +1,27 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# DOMAIN includes the scheme (https://vault.mxwani.cloud); Caddy obtains and
+# renews the Let's Encrypt certificate for that host automatically.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	# Optional: only allow the admin panel from trusted IPs.
+	# @admin_blocked {
+	# 	path /admin*
+	# 	not remote_ip 203.0.113.10
+	# }
+	# respond @admin_blocked 403
+
+	# WebSocket notifications (/notifications/hub) are proxied automatically.
+	reverse_proxy vaultwarden:80 {
+		header_up X-Real-IP {remote_host}
+	}
+}
