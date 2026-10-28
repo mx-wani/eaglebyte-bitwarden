@@ -1,68 +1,70 @@
 # Operations
 
-All commands run from `/opt/eaglebyte-bitwarden`. After any `.env` change, apply it with `sudo docker compose up -d`.
+Coolify manages the deployment. Settings are environment variables on the resource. Apply variable changes with **Restart**, and apply changes to `docker-compose.yml` with a push or **Deploy**.
 
 ## Admin panel
 
-`https://vault.mxwani.cloud/admin`, using the password `setup.sh` printed.
+`https://vault.mxwani.cloud/admin`, using the password from `scripts/admin-token.sh`.
 
-- **Lost the password:** set `ADMIN_TOKEN=''` in `.env`, run `sudo scripts/setup.sh` to generate a new one, then `sudo docker compose up -d`.
-- **Settings saved in the panel win.** The panel writes them to `data/config.json`, which overrides `.env`. To go back to `.env`, click *Reset defaults* in the panel or delete `data/config.json`.
-- **Restrict by IP:** uncomment the `@admin_blocked` block in `caddy/Caddyfile`, then `sudo docker compose restart caddy`.
+- **Lost the password:** run `scripts/admin-token.sh` again, replace `ADMIN_TOKEN` in Coolify (Interpolation: Literal), then **Restart**.
+- **"plain text ADMIN_TOKEN" notice in the logs:** the hash was saved without Literal interpolation and Coolify mangled the `$` parts. Re-enter it with Literal set.
+- **Settings saved in the panel win.** The panel writes them to `config.json` in the volume, which overrides Coolify's variables. To go back to the variables, click *Reset defaults* in the panel.
 
 ## Users
 
-Sign-up is closed (`SIGNUPS_ALLOWED=false`). Invite people from the admin panel. Without SMTP no email goes out, so tell them to register at the vault with the invited address. With SMTP configured they get an invitation link.
+Sign-up is closed (`SIGNUPS_ALLOWED=false`). Invite people from the admin panel. Without email configured, no invitation is sent, so tell them to register at the vault with the invited address. With email configured, they get an invitation link.
 
 ## Email
 
-Uncomment the `SMTP_*` block in `.env`. Email enables invitation links, email 2FA, new-device alerts and email verification. Test it from the admin panel (*SMTP Email Settings* → *Send test email*).
+Email enables invitation links, email 2FA, new-device alerts and email verification.
+
+1. Uncomment the `SMTP_*` lines in `docker-compose.yml`, then commit and push. Vaultwarden refuses to start when `SMTP_HOST` and `SMTP_FROM` are set but empty, so these lines stay commented out until you have real values.
+2. Coolify shows the new variables. `SMTP_HOST`, `SMTP_FROM`, `SMTP_USERNAME` and `SMTP_PASSWORD` are required. Port 587 with `starttls` is the default.
+3. Deploy, then test from the admin panel (*SMTP Email Settings* → *Send test email*).
 
 ## Mobile push notifications
 
 Without push, the mobile apps only pick up changes when they sync. To enable instant sync:
 
 1. Request an installation ID and key at <https://bitwarden.com/host/>.
-2. Set `PUSH_ENABLED=true`, `PUSH_INSTALLATION_ID` and `PUSH_INSTALLATION_KEY` in `.env`. If you chose the EU region, also set the two `PUSH_*_URI` lines.
-3. Log out and back in on each phone.
+2. In Coolify, set `PUSH_ENABLED=true`, `PUSH_INSTALLATION_ID` and `PUSH_INSTALLATION_KEY`. If you chose the EU region, also set `PUSH_RELAY_URI=https://api.bitwarden.eu` and `PUSH_IDENTITY_URI=https://identity.bitwarden.eu`.
+3. **Restart**, then log out and back in on each phone.
 
 ## Backups
 
-`scripts/backup.sh` writes `backups/vaultwarden-<timestamp>.tar.gz`. It contains a consistent database snapshot taken by Vaultwarden itself (safe while running), `rsa_key.pem`, `config.json`, attachments and sends. Archives older than `BACKUP_KEEP_DAYS` (default 30) are deleted.
+Use Coolify's storage backups on the `vaultwarden-data` volume. The volume holds everything: the database, `rsa_key.pem` (which signs login sessions), attachments, sends and `config.json`.
 
-Treat archives as secrets. Vault items are encrypted with users' master passwords, but `rsa_key.pem` signs login sessions.
+1. In Coolify's S3 storage settings, add an S3-compatible destination (Backblaze B2, Cloudflare R2, AWS S3…) and validate it. Without it, backups live only on the same server.
+2. Open the resource → **Backups** → **Storage backups** → **Add**. Pick `vaultwarden-data` and set the frequency to `daily`.
+3. In the schedule:
+   - Set **Archive behavior** to **Stop containers during archive**. SQLite files copied mid-write can be corrupt. The volume is a few MB, so the vault is down for seconds, and the apps keep working offline from their cache in the meantime.
+   - Enable **S3**.
+   - Keep 7 to 30 backups.
+4. Click **Back up now** and confirm the execution shows **Success** for both locations.
 
-**Daily schedule (03:30):**
+**Restore:** download an archive from **Executions** (or from S3), stop the resource, run `./restore.sh <archive>` on the server as in [MIGRATION.md](MIGRATION.md#3-restore-on-the-coolify-server), then start the resource. Coolify has no restore button. Test a restore on a spare machine now and then, because a backup you haven't restored isn't proven.
 
-```bash
-sudo cp host/systemd/vaultwarden-backup.* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vaultwarden-backup.timer
-systemctl list-timers vaultwarden-backup.timer
-```
-
-**Off-site copy:** install [rclone](https://rclone.org/install/), run `sudo rclone config` to add a remote (Backblaze B2, S3, Google Drive…), then set `BACKUP_RCLONE_REMOTE=remote:bucket/path` in `.env`. Each backup is uploaded after it is written. Remote retention is managed on the remote side.
-
-**Restore:** `sudo scripts/restore.sh <archive>`. It validates the database, stops Vaultwarden and moves the current `data/` to `data.pre-restore-<timestamp>`. Start the stack again afterwards. Test a restore now and then, ideally on a spare machine.
+Treat archives as secrets. Vault items are encrypted with users' master passwords, but `rsa_key.pem` is not.
 
 ## Upgrades
 
-1. Read the [Vaultwarden release notes](https://github.com/dani-garcia/vaultwarden/releases) for the new version.
-2. Set `VW_VERSION` (and `CADDY_VERSION`, see [Caddy releases](https://github.com/caddyserver/caddy/releases)) in `.env`, and in `.env.example` so the repo stays current.
-3. Run `sudo scripts/update.sh`. It backs up, pulls, and restarts.
+1. Read the [Vaultwarden release notes](https://github.com/dani-garcia/vaultwarden/releases).
+2. Run **Back up now** on the storage backup.
+3. Bump the `image:` tag in `docker-compose.yml`, then commit and push (or click **Deploy**).
 
-To roll back, restore the pre-upgrade version in `.env` and restore the backup taken by `update.sh`. Database migrations only go forward.
+Database migrations only go forward. To roll back, revert the tag and restore the pre-upgrade backup.
 
 ## Logs
 
-- `sudo docker compose logs -f vaultwarden` / `caddy`
-- `data/vaultwarden.log`, the file fail2ban reads. Rotate it weekly:
+The **Logs** tab in Coolify shows the container output. The same lines go to `vaultwarden.log` inside the volume, which fail2ban reads. Rotate it weekly on the server:
 
 ```bash
 sudo cp host/logrotate/vaultwarden /etc/logrotate.d/vaultwarden
 ```
 
 ## Brute-force protection (fail2ban)
+
+On the Coolify server, after the first deploy has created the log file:
 
 ```bash
 sudo apt install fail2ban
@@ -72,25 +74,14 @@ sudo systemctl restart fail2ban
 sudo fail2ban-client status vaultwarden
 ```
 
-Five failed vault logins in 15 minutes ban the IP for 4 hours. Three failed admin logins ban it for 24 hours. Bans go in the `DOCKER-USER` iptables chain, because traffic to Caddy is forwarded into a container and skips the host's `INPUT` rules.
-
-## Firewall
-
-Docker publishes ports past `ufw`, so ports 80 and 443 stay reachable whatever `ufw` says. Keep everything else closed, and leave SSH open:
-
-```bash
-sudo ufw allow OpenSSH
-sudo ufw allow 80,443/tcp
-sudo ufw allow 443/udp
-sudo ufw enable
-```
+Five failed vault logins in 15 minutes ban the IP for 4 hours. Three failed admin logins ban it for 24 hours. Bans go in the `DOCKER-USER` iptables chain, so a banned IP also loses access to the other apps on this Coolify server.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Browser shows a certificate error | `sudo docker compose logs caddy`. The DNS record must point here, and ports 80 and 443 must be reachable from outside. Let's Encrypt rate-limits repeated failures, so fix DNS before retrying. |
-| `caddy` won't start: "address already in use" | Another web server holds 80/443: `sudo ss -ltnp 'sport = :443'` |
-| Admin page says it is disabled | `ADMIN_TOKEN` is empty in `.env`. Run `sudo scripts/setup.sh`. |
-| Apps don't sync instantly | Configure push notifications (above). The web vault and desktop apps use WebSockets, which work out of the box. |
-| `scripts/*.sh`: "not writable … Re-run with sudo" | `data/` is owned by root because the container runs as root. Use `sudo`. |
+| Deploy blocked: `ADMIN_TOKEN` required | Set it under Environment Variables (step 4 of the README). |
+| Certificate error in the browser | The DNS record must point at the Coolify server, and ports 80/443 must be reachable. Check **Servers** → *your server* → **Proxy** logs. |
+| Container exits: "Both `SMTP_HOST` and `SMTP_FROM` need to be set" | The SMTP lines are uncommented but have empty values. Fill them in or comment them out again. |
+| `restore.sh`: "Found 2 vaultwarden-data volumes" | Another resource uses the same volume name. Pass the right one: `./restore.sh <archive> <uuid>_vaultwarden-data`. The UUID is in the resource's URL in Coolify. |
+| Apps don't sync instantly | Set up push notifications (above). The web vault and desktop apps use WebSockets, which work through Coolify's proxy. |

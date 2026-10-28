@@ -1,9 +1,6 @@
-# Secrets and runtime state: never commit these
+# Secrets and vault data: never commit these
 .env
-data/
-data.pre-restore-*/
 .restore-*/
-backups/
 *.sqlite3
 *.sqlite3-*
 *.pem

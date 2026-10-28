@@ -1,58 +1,51 @@
-name: eaglebyte-bitwarden
-
-x-logging: &logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "3"
-
+# Deployed by Coolify (Docker Compose build pack). Coolify's proxy terminates
+# HTTPS for the domain set on the vaultwarden service and forwards to port 80.
+# Settings below are Coolify environment variables; defaults apply until changed.
 services:
   vaultwarden:
-    image: vaultwarden/server:${VW_VERSION:?set VW_VERSION in .env}
-    container_name: vaultwarden
+    # Upgrade by bumping this tag and pushing; Coolify redeploys.
+    image: vaultwarden/server:1.37.4
     restart: unless-stopped
-    env_file: .env
     environment:
-      # Fixed settings the rest of the repo depends on (fail2ban reads the log
-      # file; Caddy sends the client address in X-Real-IP).
-      LOG_FILE: /data/vaultwarden.log
-      IP_HEADER: X-Real-IP
+      - SERVICE_URL_VAULTWARDEN
+      - DOMAIN=${SERVICE_URL_VAULTWARDEN}
+      # Argon2id hash from scripts/admin-token.sh. Set Interpolation to Literal in Coolify.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:?}
+      - SIGNUPS_ALLOWED=${SIGNUPS_ALLOWED:-false}
+      - INVITATIONS_ALLOWED=${INVITATIONS_ALLOWED:-true}
+      - INVITATION_ORG_NAME=${INVITATION_ORG_NAME:-EagleByte Vault}
+      - SHOW_PASSWORD_HINT=false
+      # Mobile push: get an installation ID and key at https://bitwarden.com/host/
+      - PUSH_ENABLED=${PUSH_ENABLED:-false}
+      - PUSH_INSTALLATION_ID=${PUSH_INSTALLATION_ID}
+      - PUSH_INSTALLATION_KEY=${PUSH_INSTALLATION_KEY}
+      - PUSH_RELAY_URI=${PUSH_RELAY_URI:-https://push.bitwarden.com}
+      - PUSH_IDENTITY_URI=${PUSH_IDENTITY_URI:-https://identity.bitwarden.com}
+      # Email: Vaultwarden refuses to start when SMTP_HOST/SMTP_FROM are set but
+      # empty, so uncomment these only together with real values.
+      # - SMTP_HOST=${SMTP_HOST:?}
+      # - SMTP_FROM=${SMTP_FROM:?}
+      # - SMTP_FROM_NAME=${SMTP_FROM_NAME:-EagleByte Vault}
+      # - SMTP_PORT=${SMTP_PORT:-587}
+      # - SMTP_SECURITY=${SMTP_SECURITY:-starttls}
+      # - SMTP_USERNAME=${SMTP_USERNAME:?}
+      # - SMTP_PASSWORD=${SMTP_PASSWORD:?}
+      - IP_HEADER=X-Forwarded-For
+      - LOG_FILE=/data/vaultwarden.log # read by host/fail2ban
+      - TZ=${TZ:-UTC}
     volumes:
-      - ./data:/data
-    networks:
-      - vault
+      - vaultwarden-data:/data
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     deploy:
       resources:
         limits:
           cpus: "1"
           memory: 1g
-    logging: *logging
-
-  caddy:
-    image: caddy:${CADDY_VERSION:?set CADDY_VERSION in .env}
-    container_name: caddy
-    restart: unless-stopped
-    depends_on:
-      vaultwarden:
-        condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # HTTP/3
-    environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
-      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data # certificates and ACME account
-      - caddy_config:/config
-    networks:
-      - vault
-    logging: *logging
 
 volumes:
-  caddy_data:
-  caddy_config:
-
-networks:
-  vault:
+  vaultwarden-data:

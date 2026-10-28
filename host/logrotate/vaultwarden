@@ -1,5 +1,5 @@
 # Vaultwarden keeps its log file open, so rotate with copytruncate.
-/opt/eaglebyte-bitwarden/data/vaultwarden.log {
+/var/lib/docker/volumes/*_vaultwarden-data/_data/vaultwarden.log {
     weekly
     rotate 8
     compress

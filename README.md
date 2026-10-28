@@ -1,63 +1,63 @@
 # EagleByte Bitwarden
 
-Self-hosted password manager for EagleByte at **https://vault.mxwani.cloud**.
+Self-hosted password manager for EagleByte at **https://vault.mxwani.cloud**, deployed with [Coolify](https://coolify.io).
 
-It runs [Vaultwarden](https://github.com/dani-garcia/vaultwarden), a lightweight server compatible with every official Bitwarden app (browser extensions, desktop, iOS, Android, CLI). [Caddy](https://caddyserver.com) sits in front and gets and renews the HTTPS certificate on its own.
+It runs [Vaultwarden](https://github.com/dani-garcia/vaultwarden), a lightweight server compatible with every official Bitwarden app (browser extensions, desktop, iOS, Android, CLI). Coolify's proxy issues the HTTPS certificate and routes the domain to the container.
 
 ```
-Bitwarden apps ──HTTPS :443──▶ Caddy ──HTTP :80 (private network)──▶ Vaultwarden ──▶ ./data
-                               └─ Let's Encrypt certificate for vault.mxwani.cloud
+Bitwarden apps ──HTTPS──▶ Coolify proxy (Let's Encrypt) ──▶ vaultwarden:80 ──▶ vaultwarden-data volume
 ```
 
-## Requirements
+## Deploy on Coolify
 
-- A Linux server with a public IP and at least 1 GB of RAM
-- Docker Engine with the compose plugin ([install guide](https://docs.docker.com/engine/install/))
-- Ports **80** and **443** reachable from the internet and not used by another web server (nginx, Apache, aaPanel)
-- DNS: an `A` record for `vault.mxwani.cloud` pointing at the server (and an `AAAA` record if it has IPv6)
+**Before you start:** the repo must be reachable from Coolify. Connect your GitHub account to Coolify through a GitHub App, or add a deploy key. Point an `A` record for `vault.mxwani.cloud` at the Coolify server.
 
-## Deploy
+1. **Generate the admin token** on any machine with Docker:
 
-The paths in `host/` assume the repo lives at `/opt/eaglebyte-bitwarden`. The repo is private, so the server needs a [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys) or `gh auth login` to clone it.
+   ```bash
+   scripts/admin-token.sh
+   ```
 
-```bash
-sudo git clone git@github.com:mx-wani/eaglebyte-bitwarden.git /opt/eaglebyte-bitwarden
-cd /opt/eaglebyte-bitwarden
+   Store the password it prints. You'll paste the hash into Coolify in step 4.
 
-sudo scripts/setup.sh        # creates .env, generates the admin password, checks DNS and ports
-sudo docker compose up -d    # Caddy fetches the certificate on first start
-```
+2. **Create the resource.** In your Coolify project, choose **+ New** → **Private Repository (with GitHub App)**. Select `mx-wani/eaglebyte-bitwarden` on branch `main`. Set **Build Pack** to **Docker Compose** and **Docker Compose Location** to `/docker-compose.yml`.
 
-`setup.sh` prints the admin panel password once. Store it somewhere safe.
+3. **Set the domain.** Under **Domains**, give the `vaultwarden` service `https://vault.mxwani.cloud`. Vaultwarden listens on port 80, so no port suffix is needed.
 
-**Moving from the old aaPanel deployment?** Restore its backup before the first `up`. See [docs/MIGRATION.md](docs/MIGRATION.md).
+4. **Set the environment variables.** Under **Environment Variables**, set `ADMIN_TOKEN` to the hash from step 1. Set its **Interpolation** to **Literal**, because the hash contains `$` characters. The other variables have working defaults (see [Settings](#settings)).
 
-**Starting fresh?** Public sign-up is disabled. Open `https://vault.mxwani.cloud/admin`, invite your email under *Users*, then create the account on the vault's sign-up page.
+5. **Deploy.** When the deployment finishes, `https://vault.mxwani.cloud` shows the Bitwarden login page.
 
-## Everyday commands
+6. **Load data.** Either restore the old vault ([docs/MIGRATION.md](docs/MIGRATION.md)) or start fresh. Public sign-up is off, so a fresh start means inviting your email from `https://vault.mxwani.cloud/admin` → *Users*, then creating the account on the vault's sign-up page.
 
-Run them from `/opt/eaglebyte-bitwarden`.
+7. **Schedule backups.** See [docs/OPERATIONS.md](docs/OPERATIONS.md#backups).
 
-| Task | Command |
-| --- | --- |
-| Status | `sudo docker compose ps` |
-| Logs | `sudo docker compose logs -f vaultwarden` (or `caddy`) |
-| Back up now | `sudo scripts/backup.sh` |
-| Restore | `sudo scripts/restore.sh backups/vaultwarden-YYYYMMDD-HHMMSS.tar.gz` |
-| Upgrade | bump `VW_VERSION` / `CADDY_VERSION` in `.env`, then `sudo scripts/update.sh` |
-| Apply `.env` changes | `sudo docker compose up -d` |
+## Settings
+
+All settings are Coolify environment variables. Apply changes with **Restart**.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ADMIN_TOKEN` | *(required)* | Argon2id hash for the `/admin` panel |
+| `SIGNUPS_ALLOWED` | `false` | Open public registration |
+| `INVITATIONS_ALLOWED` | `true` | Let admins and org owners invite users |
+| `INVITATION_ORG_NAME` | `EagleByte Vault` | Name shown in invitation emails |
+| `PUSH_ENABLED`, `PUSH_INSTALLATION_ID`, `PUSH_INSTALLATION_KEY` | off | Instant sync on mobile ([setup](docs/OPERATIONS.md#mobile-push-notifications)) |
+| `TZ` | `UTC` | Timezone for logs |
+
+Email needs a small change to `docker-compose.yml`; see [docs/OPERATIONS.md](docs/OPERATIONS.md#email).
+
+## Upgrading
+
+The image tag is pinned in `docker-compose.yml`. Check the [release notes](https://github.com/dani-garcia/vaultwarden/releases), bump the tag, then commit and push. Coolify redeploys on push when auto-deploy is on; otherwise click **Deploy**.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `docker-compose.yml` | Vaultwarden and Caddy services |
-| `caddy/Caddyfile` | HTTPS, security headers, reverse proxy, optional admin IP allowlist |
-| `.env.example` | Every setting, documented; copied to `.env` (never committed) |
-| `scripts/` | `setup`, `backup`, `restore` and `update` helpers |
-| `host/systemd/` | Daily backup timer |
+| `docker-compose.yml` | The Vaultwarden service as Coolify deploys it |
+| `scripts/admin-token.sh` | Generates the admin password and its Argon2id hash |
+| `scripts/restore.sh` | Restores a backup into Coolify's Docker volume |
 | `host/fail2ban/` | Bans IPs that keep failing user or admin logins |
-| `host/logrotate/` | Rotation for `data/vaultwarden.log` |
+| `host/logrotate/` | Rotation for Vaultwarden's log file |
 | `docs/` | [Migration](docs/MIGRATION.md) and [operations](docs/OPERATIONS.md) guides |
-
-`data/`, `backups/` and `.env` hold secrets and are git-ignored.

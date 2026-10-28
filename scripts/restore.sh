@@ -1,24 +1,54 @@
 #!/usr/bin/env bash
-# Restore Vaultwarden data from a backup archive or directory.
-# Accepts archives from scripts/backup.sh and the old aaPanel backup
-# (bitwarden_FULL_*.tar.gz): it finds db.sqlite3 wherever it is inside.
-# The current data/ folder is kept as data.pre-restore-<timestamp>.
-# Usage: scripts/restore.sh [-y] <backup.tar.gz | directory>
-# shellcheck source=scripts/_common.sh
-source "$(dirname "$0")/_common.sh"
+# Restore Vaultwarden data into the Docker volume Coolify manages.
+#
+# Accepts a Coolify storage-backup archive, the old aaPanel backup
+# (bitwarden_FULL_*.tar.gz) or a directory: it finds db.sqlite3 wherever it is
+# inside. The volume's current contents are first saved to
+# ./pre-restore-<volume>-<timestamp>.tar.gz.
+#
+# Stop the application in Coolify, then on the server:
+#   sudo ./restore.sh [-y] <backup.tar.gz | directory> [volume]
+# The volume is detected automatically when exactly one *_vaultwarden-data exists.
+set -euo pipefail
+
+log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Run sqlite3 against a database file, falling back to a throwaway container
+# when the host has no sqlite3 binary.
+sqlite() {
+  local db=$1; shift
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$db" "$@"
+  else
+    docker run --rm -v "$(dirname "$db"):/db" alpine:3.22 \
+      sh -c 'apk add -q --no-cache sqlite >/dev/null && sqlite3 "/db/$0" "$@"' "$(basename "$db")" "$@"
+  fi
+}
 
 assume_yes=false
 if [[ ${1:-} == -y ]]; then assume_yes=true; shift; fi
 src=${1:-}
-[[ -n $src ]] || die "Usage: scripts/restore.sh [-y] <backup.tar.gz | directory>"
+volume=${2:-}
+[[ -n $src ]] || die "Usage: restore.sh [-y] <backup.tar.gz | directory> [volume]"
 [[ -e $src ]] || die "$src not found"
 src=$(cd "$(dirname "$src")" && pwd)/$(basename "$src")
-require_writable "$REPO_DIR"
-require_writable "$DATA_DIR"
 
-# Stage next to data/ so the final move is a rename and the sqlite container
-# fallback can bind-mount it (Docker Desktop cannot mount /tmp).
-staging=$(mktemp -d "$REPO_DIR/.restore-XXXXXX")
+if [[ -z $volume ]]; then
+  mapfile -t found < <(docker volume ls -q | grep -E '(^|_)vaultwarden-data$' || true)
+  (( ${#found[@]} == 1 )) \
+    || die "Found ${#found[@]} vaultwarden-data volumes (${found[*]:-none}). Pass the volume name as the second argument."
+  volume=${found[0]}
+fi
+docker volume inspect "$volume" >/dev/null 2>&1 \
+  || die "Docker volume $volume not found. Deploy the app in Coolify once so it exists."
+[[ -z $(docker ps -q --filter "volume=$volume") ]] \
+  || die "A container is still using $volume. Stop the application in Coolify first."
+log "Target volume: $volume"
+
+# Stage under the current directory: Docker Desktop cannot bind-mount /tmp.
+staging=$(mktemp -d "$PWD/.restore-XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 
 if [[ -f $src ]]; then
@@ -55,17 +85,16 @@ done
 [[ -f "$work/rsa_key.pem" ]] || warn "No rsa_key.pem in backup: everyone will be logged out and must sign in again."
 
 if ! $assume_yes; then
-  read -rp "Replace the current data/ with this backup? [y/N] " answer
+  read -rp "Replace the contents of $volume with this backup? [y/N] " answer
   [[ $answer == [yY]* ]] || die "Aborted."
 fi
 
-compose stop vaultwarden 2>/dev/null || true
-if [[ -d $DATA_DIR ]] && [[ -n $(ls -A "$DATA_DIR") ]]; then
-  previous="$REPO_DIR/data.pre-restore-$(date +%Y%m%d-%H%M%S)"
-  mv "$DATA_DIR" "$previous"
-  log "Previous data kept in $(basename "$previous")"
-fi
-rm -rf "$DATA_DIR"
-mv "$work" "$DATA_DIR"
+previous="pre-restore-$volume-$(date +%Y%m%d-%H%M%S).tar.gz"
+docker run --rm -v "$volume:/data:ro" -v "$PWD:/out" alpine:3.22 tar -czf "/out/$previous" -C /data .
+chmod 600 "$previous"
+log "Previous volume contents saved to $previous"
 
-log "Restore complete. Start the stack with: docker compose up -d"
+docker run --rm -v "$volume:/data" -v "$work:/src:ro" alpine:3.22 \
+  sh -c 'find /data -mindepth 1 -delete && cp -a /src/. /data/'
+
+log "Restore complete. Start the application in Coolify."

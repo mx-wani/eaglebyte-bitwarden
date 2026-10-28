@@ -1,10 +1,11 @@
-# Bans are added to the DOCKER-USER chain because traffic to Caddy is
-# forwarded into a container and never reaches the host's INPUT chain.
+# Bans are added to the DOCKER-USER chain because traffic to Coolify's proxy
+# is forwarded into a container and never reaches the host's INPUT chain.
+# logpath globs the Coolify-managed volume (<resource-uuid>_vaultwarden-data).
 
 [vaultwarden]
 enabled   = true
 filter    = vaultwarden
-logpath   = /opt/eaglebyte-bitwarden/data/vaultwarden.log
+logpath   = /var/lib/docker/volumes/*_vaultwarden-data/_data/vaultwarden.log
 banaction = iptables-allports
 chain     = DOCKER-USER
 maxretry  = 5
@@ -14,7 +15,7 @@ bantime   = 4h
 [vaultwarden-admin]
 enabled   = true
 filter    = vaultwarden-admin
-logpath   = /opt/eaglebyte-bitwarden/data/vaultwarden.log
+logpath   = /var/lib/docker/volumes/*_vaultwarden-data/_data/vaultwarden.log
 banaction = iptables-allports
 chain     = DOCKER-USER
 maxretry  = 3
